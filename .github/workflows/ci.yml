@@ -29,6 +29,35 @@ jobs:
 
     - run: npm install
 
+    # dist/ bundles are generated from lib/, and package.json ships them
+    # (module/exports.import/unpkg/jsdelivr), so they must be rebuilt from the
+    # patched sources before the tests assert on them.
+    - run: npm run browserify
+
+    # @rollup/plugin-commonjs names the synthetic namespace variable of the
+    # `index.js` entry after the directory that holds it, so a checkout in
+    # `js-yaml-<hash>/` emits `var jsYaml<Hash> = {` where public 4.1.0 has
+    # `var jsYaml = {`. The suffix is inert (an internal var; the UMD global is
+    # still `jsyaml` from output.name, named exports unchanged) but the hash
+    # comes from a per-run path, so leaving it in would make the shipped
+    # bundles non-reproducible. Rewrite it back. No-op when the directory is
+    # already named `js-yaml` and rollup emitted plain `jsYaml`.
+    - name: Normalize rollup namespace identifier in dist/ bundles
+      run: |
+        set -eu
+        for f in dist/js-yaml.js dist/js-yaml.mjs; do
+          sed -i -E \
+            -e 's/\bvar jsYaml[A-Za-z0-9_$]* = [{]/var jsYaml = {/' \
+            -e 's/\bexports\.default = jsYaml[A-Za-z0-9_$]*;/exports.default = jsYaml;/' \
+            -e 's/\bexport default jsYaml[A-Za-z0-9_$]*;/export default jsYaml;/' \
+            "$f"
+          test "$(grep -c '\bjsYaml\b' "$f")" = 2
+        done
+        if grep -rEn 'jsYaml[A-Za-z0-9_$]+' dist/; then
+          echo "dist/ still carries a build-directory-derived identifier" >&2
+          exit 1
+        fi
+
     - run: npm test
 
   package:
@@ -50,6 +79,28 @@ jobs:
         npm config set //time-machines-npm.sealsecurity.io/:_authToken=2021-04-14T21:07:09.057000Z
 
     - run: npm install
+
+    # regenerate the shipped dist/ bundles from the patched lib/ sources,
+    # `npm pack --ignore-scripts` would otherwise package the stale ones
+    - run: npm run browserify
+
+    # keep the packaged bundles byte-reproducible — see the identical step in
+    # the `build` job for why the rollup namespace identifier needs rewriting
+    - name: Normalize rollup namespace identifier in dist/ bundles
+      run: |
+        set -eu
+        for f in dist/js-yaml.js dist/js-yaml.mjs; do
+          sed -i -E \
+            -e 's/\bvar jsYaml[A-Za-z0-9_$]* = [{]/var jsYaml = {/' \
+            -e 's/\bexports\.default = jsYaml[A-Za-z0-9_$]*;/exports.default = jsYaml;/' \
+            -e 's/\bexport default jsYaml[A-Za-z0-9_$]*;/export default jsYaml;/' \
+            "$f"
+          test "$(grep -c '\bjsYaml\b' "$f")" = 2
+        done
+        if grep -rEn 'jsYaml[A-Za-z0-9_$]+' dist/; then
+          echo "dist/ still carries a build-directory-derived identifier" >&2
+          exit 1
+        fi
 
     - run: npm pack --ignore-scripts
 
